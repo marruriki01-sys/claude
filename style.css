@@ -100,6 +100,9 @@ input[type=range]{width:100%;accent-color:var(--ball)}
 .quick label,.row{display:flex;gap:8px;align-items:center;color:var(--muted);font-size:14px}
 .err{color:var(--warn);margin:0}
 
+.upg{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;background:rgba(255,207,115,.08);border:1px solid #6b5426;border-radius:14px;padding:10px 14px;color:var(--gold);font-size:14px}
+.upg .btn{min-height:38px;padding:8px 14px}
+
 /* sheets */
 .sheet{position:fixed;inset:0;z-index:40;display:grid;align-items:end;justify-items:center;background:rgba(5,3,10,.6);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);animation:fade .18s}
 .sheet-card{width:min(560px,100%);max-height:88dvh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:22px 22px 0 0;padding:16px 20px calc(20px + env(safe-area-inset-bottom,0px));display:grid;gap:14px;animation:up .22s cubic-bezier(.2,.8,.2,1)}
@@ -156,19 +159,57 @@ input[type=range]{width:100%;accent-color:var(--ball)}
 .hrow small{color:var(--muted)}
 .hrow .s{font:700 18px var(--f-num)}
 
-@media(max-width:700px){
-  .cue{grid-template-columns:auto minmax(0,1fr);padding:8px 12px;gap:10px}
-  .cue .pair{grid-column:1/-1}
-  .chip{flex:1;min-width:0;padding:4px 6px}
-  .chip b{font-size:19px}
-  .arrow{font-size:40px}
-  .say{font-size:19px}
-  #cv{height:min(46vh,360px)}
-  .count{font-size:80px}
-  .btn.round{width:48px;height:48px}
+button,.btn,.icon,.phr button,.tabs button,input[type=range]{touch-action:manipulation}
+@media(max-width:700px),(max-height:520px){
+  /* iOS zooms into any input under 16px — keep form controls at 16px */
+  select,input[type=text]{font-size:16px}
   .hero{padding:16px}
+  /* singing screen fills exactly one phone screen: lane stretches, controls sit at the bottom near the thumb */
+  .view.sing{height:100dvh;display:flex;flex-direction:column;gap:8px;overflow:hidden;
+    padding-top:calc(8px + env(safe-area-inset-top,0px));padding-bottom:calc(10px + env(safe-area-inset-bottom,0px))}
+  .sing .sbar .icon{width:40px;height:40px}
+  .sing .stitle b{font-size:16px}
+  .cue{grid-template-columns:auto minmax(0,1fr) auto;padding:6px 10px;gap:8px;border-radius:14px}
+  .arrow{font-size:34px}
+  .say{font-size:17px}
+  .say small{font-size:12.5px}
+  .pair{gap:6px}
+  .chip{min-width:0;padding:3px 7px;border-radius:10px}
+  .chip b{font-size:15px}
+  .chip span{font-size:10.5px}
+  .sing .stagebox{flex:1 1 auto;min-height:180px;border-radius:16px}
+  #cv{height:100%}
+  .count{font-size:80px}
+  .transport{gap:8px}
+  .btn.round{width:50px;height:50px}
+  #bPlay{width:58px;height:58px;font-size:22px}
+  input[type=range]#seek{height:30px}
+  .miclabel{font-size:12px;margin:-4px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .phr{flex:none}
+  .phr button{padding:8px 12px}
+  .quick{flex-wrap:nowrap;overflow-x:auto;gap:8px;flex:none}
+  .quick label{white-space:nowrap}
+  .quick select{padding:6px 8px;min-height:40px}
+  .quick .btn{min-height:40px;padding:8px 12px}
+  .upg{font-size:13px;padding:8px 10px}
 }
-@media(max-width:700px) and (orientation:landscape){
-  .cue{display:none} #cv{height:62vh}
+@media(max-width:380px){ .pair .chip.tg{display:none} }
+/* phone on its side: give the lane everything */
+@media(max-height:520px) and (orientation:landscape){
+  .cue,.miclabel,.upg{display:none!important}
+  .view.sing{max-width:none}
+  .sing .sbar{position:absolute;top:calc(6px + env(safe-area-inset-top,0px));left:max(10px,env(safe-area-inset-left,0px));right:max(10px,env(safe-area-inset-right,0px));z-index:3;pointer-events:none}
+  .sing .sbar .icon{pointer-events:auto;background:rgba(30,23,48,.75)}
+  .sing .stitle{opacity:.85;text-shadow:0 1px 6px #000}
+  .sing .stagebox{margin-top:0}
+  .view.sing{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:minmax(0,1fr) auto auto;gap:6px 10px}
+  .sing .stagebox,.sing .transport,.sing .err{grid-column:1/-1}
+  .sing .phr{grid-column:1;align-self:center}
+  .sing .quick{grid-column:2;align-self:center}
+  .btn.round{width:44px;height:44px;font-size:18px}
+  #bPlay{width:50px;height:50px}
+  .phr button{padding:6px 10px}
+  .quick select,.quick .btn{min-height:36px}
+  .quick label{font-size:0;gap:0} .quick label select{font-size:15px}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}

@@ -5,4 +5,4 @@
 - เพลงและประวัติเก็บในเครื่องผู้ใช้เท่านั้น (IndexedDB) ไม่มีการอัปโหลด
 - ไม่มีไฟล์เพลงอยู่ในเว็บนี้ `packs/` เก็บแค่เส้นระดับเสียง
 
-ตัววิเคราะห์ทำนองใช้ [Essentia.js](https://github.com/MTG/essentia.js) (AGPL-3.0) ดู `vendor/LICENSE`
+ตัวจับเสียงร้องใช้ RMVPE (โมเดลจากโปรเจกต์ RVC แปลงเป็น ONNX 8-bit) ผ่าน [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT) วิธีสำรองใช้ [Essentia.js](https://github.com/MTG/essentia.js) (AGPL-3.0) ดู `vendor/LICENSE`

@@ -90,7 +90,7 @@ async function renderLib() {
     d.className = 'song'; d.tabIndex = 0; d.setAttribute('role', 'button');
     d.innerHTML = `<div class="cover" style="${coverStyle(s.id)}">${esc((s.title || '?').trim().charAt(0) || '♪')}</div>
       <div><h3>${esc(s.title)}</h3><div class="meta">${esc(s.artist || 'ไม่ระบุศิลปิน')} · ${fmt(s.duration)}</div>
-      <div class="tags">${s.kind === 'pack' ? '<span class="tag acc">✦ เส้นแม่นพิเศษ</span>' : '<span class="tag">เส้นอัตโนมัติ</span>'}${s.best != null ? `<span class="tag best">ดีสุด ${s.best}%</span>` : ''}${s.plays ? `<span class="tag">ร้องแล้ว ${s.plays} ครั้ง</span>` : ''}</div></div>
+      <div class="tags">${s.kind === 'pack' ? '<span class="tag acc">✦ เส้นแม่นพิเศษ</span>' : s.engine === 'rmvpe' ? '<span class="tag">เส้นอัตโนมัติ (RMVPE)</span>' : '<span class="tag">เส้นแบบเก่า · อัปเกรดได้</span>'}${s.best != null ? `<span class="tag best">ดีสุด ${s.best}%</span>` : ''}${s.plays ? `<span class="tag">ร้องแล้ว ${s.plays} ครั้ง</span>` : ''}</div></div>
       <button class="del" aria-label="ลบเพลง ${esc(s.title)}">🗑</button>`;
     d.addEventListener('click', e => { if (e.target.closest('.del')) { e.stopPropagation(); askDelete(s); return; } openSong(s.id); });
     d.addEventListener('keydown', e => { if (e.key === 'Enter') openSong(s.id); });
@@ -129,13 +129,14 @@ async function decodeFile(file) {
   try { ac.close(); } catch (e) {}
   return ab;
 }
-async function to16k(ab) {
+async function to16k(ab, highpass) {
   const n = Math.ceil(ab.duration * 16000);
   try {
     const oc = new OfflineAudioContext(1, n, 16000);
     const s = oc.createBufferSource(); s.buffer = ab;
-    const hp = oc.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 150; hp.Q.value = 0.7;
-    s.connect(hp).connect(oc.destination); s.start();
+    if (highpass) { const hp = oc.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 150; hp.Q.value = 0.7; s.connect(hp).connect(oc.destination); }
+    else s.connect(oc.destination);
+    s.start();
     const r = await oc.startRendering();
     return r.getChannelData(0);
   } catch (e) {
@@ -146,7 +147,7 @@ async function to16k(ab) {
     for (let i = 0; i < n; i++) {
       const s0 = Math.floor(i * ratio), s1 = Math.min(ab.length, Math.floor((i + 1) * ratio)); let acc = 0, k = 0;
       for (let j = s0; j < s1; j++) { for (let c = 0; c < C; c++) acc += ch[c][j]; k += C; }
-      const x = k ? acc / k : 0; const y = a * (prevY + x - prevX); prevX = x; prevY = y; out[i] = y;
+      const x = k ? acc / k : 0; const y = a * (prevY + x - prevX); prevX = x; prevY = y; out[i] = highpass ? y : x;
     }
     return out;
   }
@@ -165,6 +166,63 @@ function analyze(x, onProg) {
     worker.postMessage({ x }, [x.buffer]);
   });
 }
+// RMVPE (singing-voice pitch model) — main engine for user songs
+let rmWorker = null;
+function analyzeRmvpe(x, onProg) {
+  return new Promise((res, rej) => {
+    if (!rmWorker) rmWorker = new Worker('rmvpe-worker.js');
+    rmWorker.onmessage = e => {
+      const d = e.data;
+      if (d.stage) { onProg && onProg(d.stage, d.prog); return; }
+      if (d.err) { rej(new Error(d.err)); return; }
+      res(d);
+    };
+    rmWorker.onerror = () => rej(new Error('ตัววิเคราะห์ RMVPE ทำงานผิดพลาด'));
+    rmWorker.postMessage({ x }, [x.buffer]);
+  });
+}
+function rmvpeToLine(f0, conf, nOut) {
+  const n = nOut, m = new Array(n).fill(null), c = new Float32Array(n);
+  for (let j = 0; j < n; j++) {
+    const a = 2 * j, b = Math.min(f0.length - 1, 2 * j + 1); if (a >= f0.length) break;
+    c[j] = (conf[a] + conf[b]) / 2; const f = (f0[a] + f0[b]) / 2;
+    if (f > 0) m[j] = 69 + 12 * Math.log2(f / 440);
+  }
+  let on = false;
+  for (let j = 0; j < n; j++) { on = on ? c[j] >= 0.08 : c[j] >= 0.2; if (!on || m[j] == null || m[j] < 40 || m[j] > 84) m[j] = null; }
+  const runs = (test, fn) => { for (let i = 0; i < n;) { if (test(i)) { let j = i; while (j < n && test(j)) j++; fn(i, j); i = j; } else i++; } };
+  const cm = (i, j) => { let s = 0; for (let k = i; k < j; k++) s += c[k]; return s / (j - i); };
+  const lmed = (a, i, r) => { const w = []; for (let k = Math.max(0, i - r); k <= Math.min(n - 1, i + r); k++) if (a[k] != null) w.push(a[k]); if (!w.length) return null; w.sort((x, y) => x - y); return w[w.length >> 1]; };
+  for (let pass = 0; pass < 2; pass++) {
+    const ref = m.slice(), dev = new Uint8Array(n);
+    for (let i = 0; i < n; i++) if (m[i] != null) { const md = lmed(ref, i, 30); if (md != null && Math.abs(m[i] - md) > 6) dev[i] = 1; }
+    runs(i => dev[i], (i, j) => { const d = (j - i) * HOP; if (d < 0.2 || (d < 0.4 && cm(i, j) < 0.5)) for (let k = i; k < j; k++) m[k] = null; });
+  }
+  runs(i => m[i] == null, (i, j) => { if (i > 0 && j < n && m[i - 1] != null && m[j] != null && (j - i) * HOP <= 0.08) for (let k = i; k < j; k++) m[k] = m[i - 1] + (m[j] - m[i - 1]) * (k - i + 1) / (j - i + 1); });
+  runs(i => m[i] != null, (i, j) => { const d = (j - i) * HOP; if (d < 0.1 || (d < 0.3 && cm(i, j) < 0.15)) for (let k = i; k < j; k++) m[k] = null; });
+  const out = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) if (m[i] != null) { const w = []; for (let k = i - 1; k <= i + 1; k++) if (k >= 0 && k < n && m[k] != null) w.push(m[k]); w.sort((x, y) => x - y); out[i] = Math.round(w[w.length >> 1] * 10); }
+  return out;
+}
+const STAGE = { model: 'ดาวน์โหลดตัวจับเสียงร้อง (ครั้งแรกครั้งเดียว ~99MB)', init: 'เตรียมตัวจับเสียงร้อง…', mel: 'วิเคราะห์เสียงเพลง…', run: 'วาดเส้นเสียงร้อง…' };
+// full auto line: RMVPE first, Melodia fallback. returns {line, engine}
+async function autoLine(ab, nOut, base, span) {
+  try {
+    const x = await to16k(ab, false);
+    const d = await analyzeRmvpe(x, (st, p) => {
+      const w = { model: [0, 0.35], init: [0.35, 0.4], mel: [0.4, 0.45], run: [0.45, 1] }[st] || [0, 1];
+      proc(STAGE[st] + (st === 'model' || st === 'run' ? ' ' + Math.round(p * 100) + '%' : ''), base + span * (w[0] + (w[1] - w[0]) * p));
+    });
+    return { line: rmvpeToLine(d.f0, d.conf, nOut), engine: 'rmvpe' };
+  } catch (err) {
+    try { rmWorker && rmWorker.terminate(); } catch (e) {} rmWorker = null;
+    proc('เครื่องนี้ใช้ตัวจับเสียงหลักไม่ได้ ใช้วิธีสำรองแทน…', base);
+    const x = await to16k(ab, true);
+    const hz = await analyze(x, f => proc('วาดเส้นเสียงร้อง (วิธีสำรอง)… ' + Math.round(f * 100) + '%', base + span * f));
+    return { line: toLine(hz, nOut), engine: 'melodia' };
+  }
+}
+
 // Melodia Hz (hop 128 @16k) → MIDI line at 0.02 s, cleaned
 function toLine(hz, nOut) {
   const fh = 128 / 16000, out = new Array(nOut).fill(null);
@@ -222,11 +280,11 @@ async function addSong(file) {
     const ab = await decodeFile(file);
     const dur = ab.duration, nOut = Math.ceil(dur / HOP);
     proc('เตรียมเสียงสำหรับวิเคราะห์…', 0.08);
-    const x = await to16k(ab);
-    let line = null, kind = 'auto', title = guess.title, artist = guess.artist, note = '';
+    let line = null, kind = 'auto', title = guess.title, artist = guess.artist, note = '', engine = null, lag = 0, packVer = null;
     const packs = await getPacks();
     const cand = packs.find(p => Math.abs(p.duration - dur) < 4);
     if (cand) {
+      const x = await to16k(ab, true);
       proc('เช็กว่ามีเส้นแม่นพิเศษสำหรับเพลงนี้ไหม…', 0.12);
       const s0 = Math.min(25, dur / 4), s1 = Math.min(dur, s0 + 50);
       const exHz = await analyze(x.slice(Math.floor(s0 * 16000), Math.floor(s1 * 16000)), f => proc('เช็กว่ามีเส้นแม่นพิเศษสำหรับเพลงนี้ไหม…', 0.12 + f * 0.15));
@@ -234,14 +292,15 @@ async function addSong(file) {
       const m = matchPack(ex, Math.round(s0 / HOP), cand);
       if (m.score >= 0.5) {
         line = new Array(nOut).fill(0).map((_, j) => cand.p10[j + m.lag] || 0);
-        kind = 'pack'; title = cand.title; artist = cand.artist;
+        kind = 'pack'; title = cand.title; artist = cand.artist; lag = m.lag; packVer = cand.ver || 1;
         note = '✦ เจอเส้นแม่นพิเศษของเพลงนี้ ใช้เส้นที่ทำจากเสียงร้องแยกเดี่ยว';
       }
     }
     if (!line) {
-      const hz = await analyze(x, f => proc('วาดเส้นเสียงร้องจากเพลง… ' + Math.round(f * 100) + '%', 0.28 + f * 0.68));
-      line = toLine(hz, nOut);
-      note = 'เส้นนี้ระบบวาดเองจากเพลงเต็ม (ไม่ได้แยกเสียงร้อง) ส่วนใหญ่ตรง แต่บางจุดอาจไปจับเสียงเครื่องดนตรี';
+      const r = await autoLine(ab, nOut, 0.12, 0.86);
+      line = r.line; engine = r.engine;
+      note = engine === 'rmvpe' ? 'เส้นนี้วาดด้วยตัวจับเสียงร้อง RMVPE (ทำมาเพื่อเสียงคนร้องโดยเฉพาะ) ส่วนใหญ่ตรงกับเสียงร้อง บางจุดที่ดนตรีดังมากอาจคลาดได้'
+        : 'เส้นนี้วาดด้วยวิธีสำรอง (เครื่องนี้ใช้ตัวจับเสียงหลักไม่ได้) แม่นน้อยกว่า บางจุดอาจไปจับเสียงเครื่องดนตรี';
     }
     const voiced = line.filter(v => v).length * HOP;
     if (voiced < 10) throw new Error('หาเสียงร้องในไฟล์นี้ไม่เจอ (อาจเป็นเพลงบรรเลงหรือไฟล์เสีย)');
@@ -250,7 +309,7 @@ async function addSong(file) {
     $('fTitle').value = title; $('fArtist').value = artist; $('fNote').textContent = note; $('procForm').hidden = false;
     await new Promise(res => { $('fSave').onclick = res; });
     const id = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const rec = { id, title: $('fTitle').value.trim() || title, artist: $('fArtist').value.trim(), duration: dur, kind, p10: line, created: Date.now(), best: null, plays: 0 };
+    const rec = { id, title: $('fTitle').value.trim() || title, artist: $('fArtist').value.trim(), duration: dur, kind, engine, lag, packVer, p10: line, created: Date.now(), best: null, plays: 0 };
     await DB.putAudio(id, file);
     await DB.putSong(rec);
     try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
@@ -318,6 +377,17 @@ async function openSong(id) {
   const blob = await DB.audio(id);
   if (!blob) { alertErr('ไม่เจอไฟล์เพลงในเครื่อง ลองลบแล้วเพิ่มเพลงนี้ใหม่'); return; }
   pause(true);
+  // accurate-line pack got better since this song was added → swap in the new line automatically
+  if (rec.kind === 'pack') {
+    const pk = (await getPacks()).find(p => p.title === rec.title) || (await getPacks())[0];
+    if (pk && (rec.packVer || 1) !== (pk.ver || 1)) {
+      let lag = rec.lag;
+      if (lag == null) { const m = matchPack(rec.p10.slice(0, Math.min(rec.p10.length, 6000)), 0, pk); lag = m.lag; }
+      rec.p10 = rec.p10.map((_, j) => pk.p10[j + lag] || 0); rec.lag = lag; rec.packVer = pk.ver || 1;
+      try { await DB.putSong(rec); } catch (e) {}
+    }
+  }
+  $('upg').hidden = !(rec.kind === 'auto' && rec.engine !== 'rmvpe');
   S = rec; buildModel(rec);
   if (curUrl) URL.revokeObjectURL(curUrl);
   curUrl = URL.createObjectURL(blob); el.src = curUrl; applyAudio();
@@ -327,6 +397,18 @@ async function openSong(id) {
   $('score').textContent = '–'; $('err').hidden = true; window._c = undefined; window._lastBall = null;
   renderPhr(); show('vSing');
 }
+$('upgBtn').onclick = async () => {
+  if (!S) return; pause(true);
+  const id = S.id;
+  $('procForm').hidden = true; $('procH').textContent = 'อัปเกรดเส้นเสียงร้อง';
+  proc('อ่านไฟล์เพลง…', 0.03, 'ใช้เวลาประมาณ 1–3 นาที (มือถือช้ากว่าคอม) อย่าปิดหน้านี้');
+  try {
+    const blob = await DB.audio(id); const ab = await decodeFile(blob);
+    const r = await autoLine(ab, Math.ceil(ab.duration / HOP), 0.05, 0.95);
+    const rec = await DB.song(id); rec.p10 = r.line; rec.engine = r.engine; await DB.putSong(rec);
+    $('proc').hidden = true; openSong(id);
+  } catch (err) { $('procH').textContent = 'อัปเกรดไม่สำเร็จ'; proc(err.message || String(err), 0, 'แตะพื้นหลังเพื่อปิด'); $('proc').onclick = e => { if (e.target === $('proc')) $('proc').hidden = true; }; }
+};
 function renderPhr() {
   const box = $('phr'); box.innerHTML = '';
   PH.forEach((p, i) => {
@@ -349,6 +431,9 @@ function ensureCtx() {
   if (ctx.state !== 'running') ctx.resume();
   if (!osc) { osc = ctx.createOscillator(); og = ctx.createGain(); osc.type = 'triangle'; og.gain.value = 0; osc.connect(og).connect(ctx.destination); osc.start(); }
 }
+// iOS starts an AudioContext made outside a tap as "suspended": wake it on the next tap
+['touchend', 'click'].forEach(ev => addEventListener(ev, () => { if (ctx && ctx.state === 'suspended') ctx.resume(); }, { passive: true }));
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 function play() {
   if (!S) return;
   ensureCtx(); applyAudio();
@@ -369,25 +454,61 @@ $('back').onclick = () => { pause(); show('vLib'); };
 function alertErr(t) { $('err').hidden = false; $('err').textContent = t; }
 
 // ---------- mic + pitch ----------
-let an = null, buf = null, micOn = false, stream = null, gainN = null; const hist = [];
-function yin(b, sr) {
-  const N = b.length, h = N >> 1, d = new Float32Array(h); let r = 0;
-  for (let i = 0; i < N; i++) r += b[i] * b[i];
-  if (Math.sqrt(r / N) < 0.006) return null;
-  for (let t = 1; t < h; t++) { let s = 0; for (let i = 0; i < h; i++) { const x = b[i] - b[i + t]; s += x * x; } d[t] = s; }
-  let a = 0; d[0] = 1; for (let t = 1; t < h; t++) { a += d[t]; d[t] = d[t] * t / (a || 1); }
-  const lo = Math.floor(sr / 900), hi = Math.min(h - 1, Math.floor(sr / 70));
-  for (let t = lo; t < hi; t++) { if (d[t] < 0.15) { while (t + 1 < hi && d[t + 1] < d[t]) t++; const p = d[t - 1], q = d[t + 1], den = p + q - 2 * d[t]; return sr / (t + (den ? (p - q) / (2 * den) : 0)); } }
-  return null;
+let an = null, buf = null, micOn = false, stream = null, gainN = null;
+// McLeod pitch method on a 2x-decimated buffer, 55–1000 Hz
+function mpm(b, sr, gate) {
+  const W = b.length >> 1, x = new Float32Array(W), sr2 = sr / 2; let mean = 0;
+  for (let i = 0; i < W; i++) { x[i] = (b[2 * i] + b[2 * i + 1]) * 0.5; mean += x[i]; }
+  mean /= W; let e = 0; for (let i = 0; i < W; i++) { x[i] -= mean; e += x[i] * x[i]; }
+  const rms = Math.sqrt(e / W); if (rms < gate) return null;
+  const tMin = Math.max(2, Math.floor(sr2 / 1000)), tMax = Math.min(W - 2, Math.ceil(sr2 / 55));
+  const n = new Float32Array(tMax + 2);
+  // m(tau) via running sums of squares
+  const sq = new Float32Array(W + 1); for (let i = 0; i < W; i++) sq[i + 1] = sq[i] + x[i] * x[i];
+  for (let t = 0; t <= tMax + 1; t++) {
+    let r = 0; const L = W - t; for (let i = 0; i < L; i++) r += x[i] * x[i + t];
+    const m = sq[L] + (sq[W] - sq[t]); n[t] = m > 0 ? 2 * r / m : 0;
+  }
+  // key maxima between positive zero crossings
+  const peaks = []; let t = 1; while (t < tMax && n[t] > 0) t++;
+  while (t < tMax) {
+    while (t < tMax && n[t] <= 0) t++;
+    let best = t; while (t < tMax && n[t] > 0) { if (n[t] > n[best]) best = t; t++; }
+    if (best >= tMin && best < tMax) peaks.push(best);
+  }
+  if (!peaks.length) return null;
+  let mx = 0; for (const p of peaks) mx = Math.max(mx, n[p]);
+  const k = peaks.find(p => n[p] >= 0.88 * mx);
+  const a = n[k - 1], bb = n[k], c = n[k + 1], den = a - 2 * bb + c, sh = den ? 0.5 * (a - c) / den : 0;
+  return { f: sr2 / (k + sh), c: bb, rms };
 }
+// smoothing: confidence gate, octave-snap to the recent stable pitch, median of 5, light easing for the ball
+function makeTracker() {
+  const h = []; let disp = null, stable = null, miss = 0;
+  return (raw, conf) => {
+    if (raw != null && (raw < 33 || raw > 88 || conf < 0.6)) raw = null;
+    if (raw != null && stable != null) { const d = raw - stable; if (Math.abs(d - 12) < 1.2) raw -= 12; else if (Math.abs(d + 12) < 1.2) raw += 12; }
+    h.push(raw); if (h.length > 5) h.shift();
+    const v = h.filter(x => x != null).sort((a, b) => a - b);
+    if (raw == null || v.length < 2) { if (++miss > 3) { disp = null; stable = miss > 30 ? null : stable; } return disp; }
+    miss = 0; const med = v[v.length >> 1]; const val = Math.abs(raw - med) > 1 ? med : raw;
+    stable = stable == null ? val : stable + (val - stable) * 0.15;
+    disp = disp == null || Math.abs(val - disp) > 0.8 ? val : disp + (val - disp) * 0.6;
+    return disp;
+  };
+}
+const track = makeTracker();
 async function startMic(id) {
   try {
-    ensureCtx();
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw { name: 'ต้องเปิดผ่านลิงก์ https' };
     if (stream) stream.getTracks().forEach(k => k.stop());
     const c = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
     if (id) c.deviceId = { exact: id };
     stream = await navigator.mediaDevices.getUserMedia({ audio: c });
+    // iPhone switches the audio hardware into record mode (often a new sample rate) when the mic opens;
+    // an AudioContext made before that crackles or plays at the wrong speed, so rebuild it now.
+    if (ctx && !ctx._afterMic) { try { ctx.close(); } catch (e) {} ctx = null; osc = null; og = null; }
+    ensureCtx(); ctx._afterMic = true;
     const s = ctx.createMediaStreamSource(stream);
     gainN = ctx.createGain(); gainN.gain.value = +$('gain').value;
     an = ctx.createAnalyser(); an.fftSize = 2048; s.connect(gainN).connect(an); buf = new Float32Array(2048); micOn = true;
@@ -402,6 +523,7 @@ async function startMic(id) {
     alertErr('เปิดไมค์ไม่ได้ กดอนุญาตไมค์ (ไอคอนข้างช่องที่อยู่เว็บ / ตั้งค่า Safari) แล้วลองใหม่ (' + (e.name || e) + ')');
   }
 }
+if (IS_IOS) $('lvlTxt').textContent = 'ยังไม่ได้เปิดไมค์ · แนะนำหูฟังมีสาย (หูฟังบลูทูธ + ไมค์ บน iPhone เสียงเพลงจะเปลี่ยนเป็นแบบเสียงโทรศัพท์)';
 $('micSel').onchange = () => startMic($('micSel').value);
 $('bMic').onclick = () => { if (!micOn) startMic(pref.get('mic', '') || undefined); else $('sheet').hidden = false; };
 
@@ -519,9 +641,8 @@ function step() {
     let r = 0; for (let i = 0; i < buf.length; i += 4) r += buf[i] * buf[i]; r = Math.sqrt(r / (buf.length / 4));
     const pc = Math.min(100, Math.round(Math.sqrt(r) * 260)); $('lvl').style.width = pc + '%';
     $('lvlTxt').textContent = pc < 8 ? 'ไมค์ไม่ค่อยได้ยิน ลองร้องดังขึ้น หรือเพิ่มความไวในตั้งค่า ⚙' : pc > 92 ? 'เสียงดังเกิน ลองลดความไวไมค์' : 'ไมค์ได้ยินเสียงคุณ ✓';
-    const f = yin(buf, ctx.sampleRate); let raw = f ? 69 + 12 * Math.log2(f / 440) : null; if (raw != null && (raw < 36 || raw > 88)) raw = null;
-    hist.push(raw); if (hist.length > 7) hist.shift(); const v = hist.filter(x => x != null).sort((a, b) => a - b);
-    you = (raw != null && v.length >= 3) ? (Math.abs(raw - v[v.length >> 1]) > 1 ? v[v.length >> 1] : raw) : null;
+    const pd = mpm(buf, ctx.sampleRate, 0.004);
+    you = track(pd ? 69 + 12 * Math.log2(pd.f / 440) : null, pd ? pd.c : 0);
   }
   const sh = SH(), g = guideAt(t), gs = g == null ? null : g + sh, blk = blockAt(t), rv = rawAt(t), tg = rv != null ? rv + sh : null, shown = you != null ? fold(you, gs) : null;
   const near = shown != null && tg != null ? nearDiff(shown, t, sh) : null;
@@ -541,6 +662,7 @@ function step() {
     } else cue('•', 'พักหายใจ', gs != null ? 'โน้ตถัดไป ' + nn(gs) : '', '');
     let h = 0, n = 0; B.forEach(b => { h += b.hit; n += b.tot; }); if (n > 30) $('score').textContent = Math.round(h / n * 100) + '%';
   } else if (!playing) cue('•', micOn ? 'กด ▶ เพื่อเริ่ม' : 'กด 🎤 เปิดไมค์ แล้วกด ▶', micOn && you != null ? 'ได้ยินเสียงคุณแล้ว' : '', '');
+  resizeCanvas();
   draw(t, gs, shown, ok);
   requestAnimationFrame(step);
 }
