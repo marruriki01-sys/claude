@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ฝึกร้องตรงคีย์</title>
+<meta name="description" content="ฝึกร้องเพลงให้ตรงคีย์ เส้นเสียงจากนักร้องจริง ลูกบอลตามเสียงไมค์คุณ มีคะแนนและบอกจุดที่พลาด">
+<meta name="theme-color" content="#120d1c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ฝึกร้อง">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ LIBRARY ============ -->
+<main id="vLib" class="view">
+  <header class="top">
+    <div class="brand"><span class="logo" aria-hidden="true"></span><div><h1>ฝึกร้องตรงคีย์</h1><p>ร้องตามเส้นเสียงนักร้องจริง ลูกบอลคือเสียงคุณ</p></div></div>
+  </header>
+
+  <section class="hero">
+    <div>
+      <h2>คลังเพลงของคุณ</h2>
+      <p>ใส่ไฟล์เพลงจากเครื่อง ระบบจะวาดเส้นเสียงร้องให้เอง เพลงเก็บอยู่ในเครื่องคุณเท่านั้น ไม่อัปโหลดไปไหน</p>
+    </div>
+    <label class="btn primary big" id="addBtn">
+      <input type="file" id="fileIn" accept="audio/*,.mp3,.m4a,.wav,.aac,.ogg,.flac" hidden>
+      <span>＋ เพิ่มเพลง</span>
+    </label>
+  </section>
+
+  <div id="songs" class="songs"></div>
+
+  <section class="empty" id="empty" hidden>
+    <div class="empty-art" aria-hidden="true">♪</div>
+    <h3>ยังไม่มีเพลงในคลัง</h3>
+    <p>กด <b>＋ เพิ่มเพลง</b> แล้วเลือกไฟล์เพลง (mp3, m4a, wav) จากเครื่อง</p>
+  </section>
+
+  <section class="note">
+    <b>✦ เพลงที่มีเส้นแม่นพิเศษ</b>
+    <p>ดอกไม้กับคนสวย – Jay Q · ใส่ไฟล์เพลงนี้เข้ามา ระบบจะรู้เองแล้วใช้เส้นที่ทำจากเสียงร้องแยกเดี่ยว (แม่นกว่าเส้นอัตโนมัติ)</p>
+  </section>
+</main>
+
+<!-- ============ HISTORY ============ -->
+<main id="vHist" class="view" hidden>
+  <header class="top"><div class="brand"><span class="logo" aria-hidden="true"></span><div><h1>ประวัติคะแนน</h1><p>ดูว่าร้องดีขึ้นแค่ไหน</p></div></div></header>
+  <div class="hist-pick"><label for="hSong">เพลง</label><select id="hSong"></select></div>
+  <section class="card stats" id="hStats"></section>
+  <section class="card"><h3 class="h3">คะแนนแต่ละครั้ง</h3><canvas id="hChart" class="chart" aria-label="กราฟคะแนนแต่ละครั้ง"></canvas><p class="muted small" id="hChartNote"></p></section>
+  <section class="card"><h3 class="h3">ท่อนที่ต้องฝึกเพิ่ม</h3><div id="hPhr" class="phr-heat"></div></section>
+  <section class="card"><h3 class="h3">ร้องล่าสุด</h3><div id="hList" class="hlist"></div></section>
+</main>
+
+<!-- ============ SING ============ -->
+<main id="vSing" class="view sing" hidden>
+  <header class="sbar">
+    <button class="icon" id="back" aria-label="กลับไปคลังเพลง">‹</button>
+    <div class="stitle"><b id="sTitle">–</b><span id="sArtist"></span></div>
+    <button class="icon" id="gear" aria-label="ตั้งค่า" aria-expanded="false">⚙</button>
+  </header>
+
+  <section class="cue" aria-live="polite">
+    <div class="arrow" id="arrow">•</div>
+    <div class="say" id="say">กด 🎤 เปิดไมค์ แล้วกด ▶<small>&nbsp;</small></div>
+    <div class="pair">
+      <div class="chip you"><b id="youN">–</b><span>เสียงคุณ</span></div>
+      <div class="chip tg"><b id="tgN">–</b><span>ต้องร้อง</span></div>
+      <div class="chip sc"><b id="score">–</b><span>ตรงโน้ต</span></div>
+    </div>
+  </section>
+
+  <div class="stagebox">
+    <canvas id="cv" aria-label="เส้นเสียงนักร้องเลื่อนตามเพลง ลูกบอลคือเสียงคุณ"></canvas>
+    <div class="count" id="count" hidden></div>
+    <div class="miclvl" title="ระดับเสียงไมค์"><i id="lvl"></i></div>
+  </div>
+
+  <div class="transport">
+    <button class="btn primary round" id="bPlay" aria-label="เล่น">▶</button>
+    <button class="btn round" id="bMic" aria-label="เปิดไมค์">🎤</button>
+    <div class="seekwrap"><input type="range" id="seek" min="0" max="100" step="0.1" value="0" aria-label="ตำแหน่งในเพลง"><span class="time" id="time">0:00 / 0:00</span></div>
+    <button class="btn round" id="bLoop" aria-pressed="false" aria-label="วนท่อนนี้">🔁</button>
+  </div>
+  <p class="miclabel" id="lvlTxt">ยังไม่ได้เปิดไมค์ · ใส่หูฟังก่อนร้อง</p>
+
+  <div class="phr" id="phr" aria-label="เลือกท่อน"></div>
+
+  <div class="quick">
+    <label>ความเร็ว <select id="speed"><option value="0.5">50%</option><option value="0.75">75%</option><option value="1" selected>100%</option></select></label>
+    <label>ฟัง <select id="guide"><option value="mix">เพลงจริง</option><option value="mixtone">เพลง + ทำนองนำ</option><option value="tone">ทำนองนำอย่างเดียว</option></select></label>
+    <button class="btn" id="bReport">📋 ดูผล</button>
+  </div>
+  <p class="err" id="err" hidden></p>
+</main>
+
+<!-- settings sheet -->
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-label="ตั้งค่า">
+    <div class="sheet-h"><b>ตั้งค่า</b><button class="icon" data-close aria-label="ปิด">✕</button></div>
+    <label class="row">ไมค์ที่ใช้<select id="micSel"><option value="">(กด 🎤 ก่อน)</option></select></label>
+    <label class="row">ความไวไมค์<select id="gain"><option value="1">ปกติ</option><option value="3" selected>ไวขึ้น ×3</option><option value="8">ไวมาก ×8</option></select></label>
+    <label class="row">ย้ายคีย์<select id="shift"></select></label>
+    <label class="row col">เลื่อนเส้นให้ตรงเสียง <b id="syncTxt">0 ms</b><input type="range" id="sync" min="-300" max="500" step="10" value="0"><small>เส้นมาก่อนเสียงที่ได้ยิน → เลื่อนไป + (หูฟังบลูทูธมักต้อง +200 ถึง +300)</small></label>
+    <label class="row chk"><input type="checkbox" id="oct" checked> ร้องต่ำ/สูงกว่าทั้งช่วงเสียง (คนละ octave) ก็นับว่าตรง</label>
+    <button class="btn ghost" id="bReset">ล้างคะแนนเพลงนี้ (รอบนี้)</button>
+    <div class="howto">
+      <b>วิธีเล่น</b>
+      <p>ใส่หูฟัง → กด 🎤 → แถบเขียวมุมขวาบนต้องขยับตอนคุณพูด → เลือกท่อน → กด ▶</p>
+      <p><b>เส้นขาว</b> = เสียงร้องจริงของนักร้อง · <b>◆ เพชร</b> = จุดที่ต้องร้องตอนนี้ · <b>ลูกบอล</b> = เสียงไมค์คุณ ร้องให้ลูกบอลทับเพชร เส้นจะเป็น<b class="gold">สีทอง</b></p>
+    </div>
+  </div>
+</div>
+
+<!-- result sheet -->
+<div class="sheet" id="result" hidden>
+  <div class="sheet-card wide" role="dialog" aria-label="ผลการร้อง">
+    <div class="sheet-h"><b>ผลการร้อง</b><button class="icon" data-close aria-label="ปิด">✕</button></div>
+    <div class="rhead">
+      <div class="ring" id="ring"><svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="52" class="rbg"/><circle cx="60" cy="60" r="52" class="rfg" id="ringFg"/></svg><div class="rin"><b id="rGrade">–</b><span id="rScore">–</span></div></div>
+      <div class="rnums">
+        <div><b id="rStable">–</b><span>เสียงนิ่งตอนลากยาว</span></div>
+        <div><b id="rTime">–</b><span>ช่วงที่ร้อง</span></div>
+        <div><b id="rBest">–</b><span>สถิติดีสุดเพลงนี้</span></div>
+      </div>
+    </div>
+    <p class="rsum" id="rSum"></p>
+    <h3 class="h3">จุดที่พลาดบ่อยที่สุด</h3>
+    <div class="mist" id="rList"></div>
+    <div class="ract"><button class="btn primary" id="rAgain">↻ ร้องอีกรอบ</button><button class="btn" id="rHist">📈 ดูประวัติ</button></div>
+  </div>
+</div>
+
+<!-- processing / dialogs -->
+<div class="sheet" id="proc" hidden>
+  <div class="sheet-card" role="dialog" aria-label="กำลังเตรียมเพลง">
+    <div class="sheet-h"><b id="procH">กำลังเตรียมเพลง</b></div>
+    <p id="procMsg" class="muted">อ่านไฟล์เพลง…</p>
+    <div class="pbar"><i id="procBar"></i></div>
+    <p class="muted small" id="procSub">เพลงยาว 3–4 นาที ใช้เวลาประมาณ 1–3 นาที (มือถือช้ากว่าคอม) อย่าปิดหน้านี้</p>
+    <div id="procForm" hidden>
+      <label class="row">ชื่อเพลง<input type="text" id="fTitle" maxlength="80"></label>
+      <label class="row">ศิลปิน<input type="text" id="fArtist" maxlength="80"></label>
+      <p class="muted small" id="fNote"></p>
+      <div class="ract"><button class="btn primary" id="fSave">บันทึกเข้าคลัง</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="sheet" id="confirm" hidden>
+  <div class="sheet-card" role="alertdialog" aria-label="ยืนยัน">
+    <p id="cMsg"></p>
+    <div class="ract"><button class="btn danger" id="cYes">ลบ</button><button class="btn" id="cNo">ยกเลิก</button></div>
+  </div>
+</div>
+
+<nav class="tabs" id="tabs">
+  <button data-v="vLib" class="on"><span>♫</span>คลังเพลง</button>
+  <button data-v="vHist"><span>📈</span>ประวัติ</button>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>
