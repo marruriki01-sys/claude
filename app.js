@@ -109,7 +109,9 @@ $('fileIn').addEventListener('change', async e => {
   const f = e.target.files && e.target.files[0]; e.target.value = '';
   if (f) addSong(f);
 });
+let procBusy = false;
 function proc(msg, frac, sub) {
+  procBusy = true;
   $('proc').hidden = false; $('procMsg').textContent = msg;
   if (frac != null) $('procBar').style.width = Math.round(frac * 100) + '%';
   if (sub != null) $('procSub').textContent = sub;
@@ -216,23 +218,66 @@ function rmvpeToLine(f0, conf, nOut) {
   for (let i = 0; i < n; i++) if (m[i] != null) { const w = []; for (let k = i - 1; k <= i + 1; k++) if (k >= 0 && k < n && m[k] != null) w.push(m[k]); w.sort((x, y) => x - y); out[i] = Math.round(w[w.length >> 1] * 10); }
   return out;
 }
-const STAGE = { model: 'ดาวน์โหลดตัวจับเสียงร้อง (ครั้งแรกครั้งเดียว ~99MB)', init: 'เตรียมตัวจับเสียงร้อง…', mel: 'วิเคราะห์เสียงเพลง…', run: 'วาดเส้นเสียงร้อง…' };
-// full auto line: RMVPE first, Melodia fallback. returns {line, engine}
+const STAGE = { model: 'ดาวน์โหลดตัวจับเสียงร้อง (ครั้งแรกครั้งเดียว ~99MB)', init: 'เตรียมตัวจับเสียงร้อง…', mel: 'วิเคราะห์เสียงร้อง…', run: 'วาดเส้นเสียงร้อง…' };
+// ---- vocal separation (MDX-Net) so the pitch tracker only hears the singer ----
+const ISO = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
+const sepThreads = () => ISO ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 2)) : 1;
+async function to44kStereo(ab) {
+  if (ab.sampleRate === 44100) return [ab.getChannelData(0).slice(), (ab.numberOfChannels > 1 ? ab.getChannelData(1) : ab.getChannelData(0)).slice()];
+  const oc = new OfflineAudioContext(2, Math.ceil(ab.duration * 44100), 44100), s = oc.createBufferSource(); s.buffer = ab; s.connect(oc.destination); s.start();
+  const r = await oc.startRendering(); return [r.getChannelData(0), r.getChannelData(1)];
+}
+let sepWorker = null;
+async function separateVocals(ab, onProg, threads) {
+  const [xl, xr] = await to44kStereo(ab);
+  return new Promise((res, rej) => {
+    const w = new Worker('sep-worker.js'); sepWorker = w;
+    w.onmessage = e => {
+      const d = e.data; if (d.stage) { onProg && onProg(d.stage, d.prog); return; }
+      w.terminate(); sepWorker = null; if (d.err) rej(new Error(d.err)); else res(d.y);
+    };
+    w.onerror = () => { try { w.terminate(); } catch (e) {} sepWorker = null; rej(new Error('ตัวแยกเสียงทำงานผิดพลาด')); };
+    w.postMessage({ xl, xr, threads: threads || sepThreads() }, [xl.buffer, xr.buffer]);
+  });
+}
+let wakeLock = null;
+async function keepAwake(on) { try { if (on) { if (navigator.wakeLock && !wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } else if (wakeLock) { await wakeLock.release(); wakeLock = null; } } catch (e) { wakeLock = null; } }
+const fmtEta = sec => sec < 60 ? 'ไม่ถึงนาที' : Math.ceil(sec / 60) + ' นาที';
+// full auto line: separate the vocal from the music → RMVPE on the vocal only. returns {line, engine}
 async function autoLine(ab, nOut, base, span) {
+  await keepAwake(true);
   try {
-    const x = await to16k(ab, false);
-    const d = await analyzeRmvpe(x, (st, p) => {
-      const w = { model: [0, 0.35], init: [0.35, 0.4], mel: [0.4, 0.45], run: [0.45, 1] }[st] || [0, 1];
-      proc(STAGE[st] + (st === 'model' || st === 'run' ? ' ' + Math.round(p * 100) + '%' : ''), base + span * (w[0] + (w[1] - w[0]) * p));
-    });
-    return { line: rmvpeToLine(d.f0, d.conf, nOut), engine: 'rmvpe' };
-  } catch (err) {
-    try { rmWorker && rmWorker.terminate(); } catch (e) {} rmWorker = null;
-    proc('เครื่องนี้ใช้ตัวจับเสียงหลักไม่ได้ ใช้วิธีสำรองแทน…', base);
-    const x = await to16k(ab, true);
-    const hz = await analyze(x, f => proc('วาดเส้นเสียงร้อง (วิธีสำรอง)… ' + Math.round(f * 100) + '%', base + span * f));
-    return { line: toLine(hz, nOut), engine: 'melodia' };
-  }
+    let x = null, engine = 'sep';
+    const t0 = performance.now();
+    const onP = (st, p) => {
+        const w = { model: [0, 0.03], init: [0.03, 0.04], run: [0.04, 0.8] }[st] || [0, 1];
+        let sub = '';
+        if (st === 'run' && p > 0.02) { const el = (performance.now() - t0) / 1000; sub = 'เหลือประมาณ ' + fmtEta(el / p * (1 - p)) + ' · อย่าปิดหน้านี้ อย่าล็อกจอ'; }
+        proc(st === 'model' ? 'ดาวน์โหลดตัวแยกเสียงร้อง (ครั้งแรกครั้งเดียว ~30MB) ' + Math.round(p * 100) + '%' : st === 'init' ? 'เตรียมตัวแยกเสียงร้อง…' : 'แยกเสียงร้องออกจากดนตรี ' + Math.round(p * 100) + '%', base + span * (w[0] + (w[1] - w[0]) * p), sub);
+    };
+    try {
+      try { x = await separateVocals(ab, onP); }
+      catch (e1) { if (sepThreads() > 1) { try { sepWorker && sepWorker.terminate(); } catch (e) {} x = await separateVocals(ab, onP, 1); } else throw e1; }
+    } catch (err) {
+      try { sepWorker && sepWorker.terminate(); } catch (e) {} sepWorker = null; x = null; engine = 'rmvpe';
+      proc('แยกเสียงร้องไม่ได้บนเครื่องนี้ ใช้วิธีเดาจากเพลงเต็มแทน…', base, '');
+    }
+    try {
+      if (!x) x = await to16k(ab, false);
+      const lo = engine === 'sep' ? 0.8 : 0;
+      const d = await analyzeRmvpe(x, (st, p) => {
+        const w = { model: [0, 0.35], init: [0.35, 0.4], mel: [0.4, 0.45], run: [0.45, 1] }[st] || [0, 1];
+        proc(STAGE[st] + (st === 'model' || st === 'run' ? ' ' + Math.round(p * 100) + '%' : ''), base + span * (lo + (1 - lo) * (w[0] + (w[1] - w[0]) * p)), '');
+      });
+      return { line: rmvpeToLine(d.f0, d.conf, nOut), engine };
+    } catch (err) {
+      try { rmWorker && rmWorker.terminate(); } catch (e) {} rmWorker = null;
+      proc('เครื่องนี้ใช้ตัวจับเสียงหลักไม่ได้ ใช้วิธีสำรองแทน…', base, '');
+      const x2 = await to16k(ab, true);
+      const hz = await analyze(x2, f => proc('วาดเส้นเสียงร้อง (วิธีสำรอง)… ' + Math.round(f * 100) + '%', base + span * f));
+      return { line: toLine(hz, nOut), engine: 'melodia' };
+    }
+  } finally { keepAwake(false); }
 }
 
 // Melodia Hz (hop 128 @16k) → MIDI line at 0.02 s, cleaned
@@ -290,7 +335,7 @@ function matchPack(ex, startFrame, pack) {
 async function addSong(file) {
   const guess = guessTitle(file.name);
   $('procForm').hidden = true; $('procH').textContent = 'กำลังเตรียมเพลง';
-  proc('อ่านไฟล์เพลง…', 0.03, 'เพลงยาว 3–4 นาที ใช้เวลาประมาณ 1–3 นาที (มือถือช้ากว่าคอม) อย่าปิดหน้านี้');
+  proc('อ่านไฟล์เพลง…', 0.03, 'เพลงที่ไม่มีเส้นพิเศษจะแยกเสียงร้องออกจากดนตรีก่อน ใช้เวลาหลายนาที (ทำครั้งเดียวต่อเพลง) อย่าปิดหน้านี้');
   try {
     const ab = await decodeFile(file);
     const dur = ab.duration, nOut = Math.ceil(dur / HOP);
@@ -315,7 +360,9 @@ async function addSong(file) {
     if (!line) {
       const r = await autoLine(ab, nOut, 0.12, 0.86);
       line = r.line; engine = r.engine;
-      note = engine === 'rmvpe' ? 'เส้นนี้วาดด้วยตัวจับเสียงร้อง RMVPE (ทำมาเพื่อเสียงคนร้องโดยเฉพาะ) ส่วนใหญ่ตรงกับเสียงร้อง บางจุดที่ดนตรีดังมากอาจคลาดได้'
+      note = engine === 'sep' ? 'เส้นนี้ทำจากเสียงร้องที่แยกออกจากดนตรีแล้ว (แม่นกว่าการเดาจากเพลงเต็ม) ถ้าจุดไหนยังไม่ตรง ใช้ปุ่มแก้เส้นใน ⚙ ได้'
+        : engine === 'rmvpe'
+        ? 'เส้นนี้วาดด้วยตัวจับเสียงร้อง RMVPE จากเพลงเต็ม (เครื่องนี้แยกเสียงร้องไม่ได้) บางจุดที่ดนตรีดังอาจคลาดได้'
         : 'เส้นนี้วาดด้วยวิธีสำรอง (เครื่องนี้ใช้ตัวจับเสียงหลักไม่ได้) แม่นน้อยกว่า บางจุดอาจไปจับเสียงเครื่องดนตรี';
     }
     const voiced = line.filter(v => v).length * HOP;
@@ -329,11 +376,11 @@ async function addSong(file) {
     await DB.putAudio(id, encodeWav(ab)); rec.audioFmt = 'wav';
     await DB.putSong(rec);
     try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
-    $('proc').hidden = true; renderLib();
+    $('proc').hidden = true; procBusy = false; renderLib();
   } catch (err) {
     $('procH').textContent = 'เพิ่มเพลงไม่สำเร็จ';
     proc(err && err.message ? err.message : 'เปิดไฟล์นี้ไม่ได้ ลองไฟล์ mp3 หรือ m4a', 0, 'แตะพื้นหลังเพื่อปิด');
-    $('proc').addEventListener('click', function h(e) { if (e.target === $('proc')) { $('proc').hidden = true; $('proc').removeEventListener('click', h); } });
+    $('proc').addEventListener('click', function h(e) { if (e.target === $('proc')) { $('proc').hidden = true; procBusy = false; $('proc').removeEventListener('click', h); } });
   }
 }
 
@@ -396,7 +443,7 @@ async function openSong(id) {
     $('procForm').hidden = true; $('procH').textContent = 'ปรับไฟล์เพลงให้ตรงจังหวะ (ครั้งเดียว)';
     proc('แปลงไฟล์เพลงเป็น WAV เพื่อให้เส้นตรงกับเสียงเป๊ะ…', 0.4, 'ใช้เวลาไม่กี่วินาที');
     try { const ab = await decodeFile(blob); blob = encodeWav(ab); await DB.putAudio(id, blob); rec.audioFmt = 'wav'; await DB.putSong(rec); } catch (e) {}
-    $('proc').hidden = true;
+    $('proc').hidden = true; procBusy = false;
   }
   if (!blob) { alertErr('ไม่เจอไฟล์เพลงในเครื่อง ลองลบแล้วเพิ่มเพลงนี้ใหม่'); return; }
   pause(true);
@@ -410,7 +457,7 @@ async function openSong(id) {
       try { await DB.putSong(rec); } catch (e) {}
     }
   }
-  $('upg').hidden = !(rec.kind === 'auto' && rec.engine !== 'rmvpe');
+  $('upg').hidden = !(rec.kind === 'auto' && rec.engine !== 'sep');
   S = rec; buildModel(rec);
   if (curUrl) URL.revokeObjectURL(curUrl);
   curUrl = URL.createObjectURL(blob); el.src = curUrl; applyAudio();
@@ -424,13 +471,13 @@ $('upgBtn').onclick = async () => {
   if (!S) return; pause(true);
   const id = S.id;
   $('procForm').hidden = true; $('procH').textContent = 'อัปเกรดเส้นเสียงร้อง';
-  proc('อ่านไฟล์เพลง…', 0.03, 'ใช้เวลาประมาณ 1–3 นาที (มือถือช้ากว่าคอม) อย่าปิดหน้านี้');
+  proc('อ่านไฟล์เพลง…', 0.03, 'แยกเสียงร้องออกจากดนตรีใหม่ ใช้เวลาหลายนาที อย่าปิดหน้านี้');
   try {
     const blob = await DB.audio(id); const ab = await decodeFile(blob);
     const r = await autoLine(ab, Math.ceil(ab.duration / HOP), 0.05, 0.95);
     const rec = await DB.song(id); rec.p10 = r.line; rec.engine = r.engine; await DB.putSong(rec);
-    $('proc').hidden = true; openSong(id);
-  } catch (err) { $('procH').textContent = 'อัปเกรดไม่สำเร็จ'; proc(err.message || String(err), 0, 'แตะพื้นหลังเพื่อปิด'); $('proc').onclick = e => { if (e.target === $('proc')) $('proc').hidden = true; }; }
+    $('proc').hidden = true; procBusy = false; openSong(id);
+  } catch (err) { $('procH').textContent = 'อัปเกรดไม่สำเร็จ'; proc(err.message || String(err), 0, 'แตะพื้นหลังเพื่อปิด'); $('proc').onclick = e => { if (e.target === $('proc')) $('proc').hidden = true; procBusy = false; }; }
 };
 function renderPhr() {
   const box = $('phr'); box.innerHTML = '';
@@ -803,9 +850,17 @@ function drawChart(ss) {
 }
 
 // ---------- boot ----------
+try { $('verIso').textContent = ISO ? 'หลายแกน ' + sepThreads() + ' เธรด' : 'แกนเดียว'; } catch (e) {}
 show('vLib');
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-  addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+  addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready).then(() => {
+      // reload (max 2x) so the page itself is served by the service worker with isolation headers → multi-thread vocal separation
+      const tries = () => { try { return +sessionStorage.getItem('coiTries') || 0; } catch (e) { return 9; } };
+      const go = () => { if (crossOriginIsolated || tries() >= 2 || (typeof procBusy !== 'undefined' && procBusy)) return; try { sessionStorage.setItem('coiTries', String(tries() + 1)); } catch (e) { return; } location.reload(); };
+      if (navigator.serviceWorker.controller) go(); else navigator.serviceWorker.addEventListener('controllerchange', go, { once: true });
+    }).catch(() => {});
+  });
 }
 
 // ---------- fix the line by hand ----------

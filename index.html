@@ -15,7 +15,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;700&display=swap" crossorigin="anonymous">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -69,7 +69,7 @@
     <button class="icon" id="gear" aria-label="ตั้งค่า" aria-expanded="false">⚙</button>
   </header>
 
-  <div class="upg" id="upg" hidden><span>✦ มีตัววาดเส้นแบบใหม่ที่แม่นกว่าเดิม</span><button class="btn primary" id="upgBtn">อัปเกรดเส้นเพลงนี้</button></div>
+  <div class="upg" id="upg" hidden><span>✦ มีตัววาดเส้นแบบใหม่ แยกเสียงร้องออกจากดนตรีก่อน แม่นกว่าเดิมมาก (ใช้เวลาหลายนาที)</span><button class="btn primary" id="upgBtn">อัปเกรดเส้นเพลงนี้</button></div>
 
   <section class="cue" aria-live="polite">
     <div class="arrow" id="arrow">•</div>
@@ -125,6 +125,7 @@
       <b>วิธีเล่น</b>
       <p>ใส่หูฟัง → กด 🎤 → แถบเขียวมุมขวาบนต้องขยับตอนคุณพูด → เลือกท่อน → กด ▶</p>
       <p><b>เส้นขาว</b> = เสียงร้องจริงของนักร้อง · <b>◆ เพชร</b> = จุดที่ต้องร้องตอนนี้ · <b>ลูกบอล</b> = เสียงไมค์คุณ ร้องให้ลูกบอลทับเพชร เส้นจะเป็น<b class="gold">สีทอง</b></p>
+      <p class="muted small" id="ver">รุ่นแอป 5 · แยกเสียงร้องก่อนวาดเส้น · <span id="verIso"></span></p>
     </div>
   </div>
 </div>
@@ -154,7 +155,7 @@
     <div class="sheet-h"><b id="procH">กำลังเตรียมเพลง</b></div>
     <p id="procMsg" class="muted">อ่านไฟล์เพลง…</p>
     <div class="pbar"><i id="procBar"></i></div>
-    <p class="muted small" id="procSub">เพลงยาว 3–4 นาที ใช้เวลาประมาณ 1–3 นาที (มือถือช้ากว่าคอม) อย่าปิดหน้านี้</p>
+    <p class="muted small" id="procSub">กำลังเตรียมเพลง อย่าปิดหน้านี้</p>
     <div id="procForm" hidden>
       <label class="row">ชื่อเพลง<input type="text" id="fTitle" maxlength="80"></label>
       <label class="row">ศิลปิน<input type="text" id="fArtist" maxlength="80"></label>

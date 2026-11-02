@@ -2,7 +2,7 @@
 // Input: 16 kHz mono Float32Array of the full song (music included). Output: f0 (Hz) + confidence every 10 ms.
 importScripts('ort/ort.wasm.min.js');
 ort.env.wasm.wasmPaths = new URL('ort/', self.location.href).href;
-ort.env.wasm.numThreads = 1;
+ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(4, self.navigator.hardwareConcurrency || 1)) : 1;
 
 const N = 1024, HOP = 160, NB = 128;
 let session = null, MEL = null;

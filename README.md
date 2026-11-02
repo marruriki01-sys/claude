@@ -6,3 +6,5 @@
 - ไม่มีไฟล์เพลงอยู่ในเว็บนี้ `packs/` เก็บแค่เส้นระดับเสียง
 
 ตัวจับเสียงร้องใช้ RMVPE (โมเดลจากโปรเจกต์ RVC แปลงเป็น ONNX 8-bit) ผ่าน [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) (MIT) วิธีสำรองใช้ [Essentia.js](https://github.com/MTG/essentia.js) (AGPL-3.0) ดู `vendor/LICENSE`
+
+เพลงที่ไม่มีเส้นพิเศษ: เว็บแยกเสียงร้องออกจากดนตรีก่อน (MDX-Net `UVR_MDXNET_9482` เป็น ONNX รันในเบราว์เซอร์ หลายเธรดผ่าน service worker ที่ใส่หัว COOP/COEP) แล้วค่อยให้ RMVPE จับระดับเสียงจากเสียงร้องที่แยกแล้ว ไฟล์เพลงเก็บเป็น WAV เพื่อให้เล่นตรงเวลา (mp3 แบบ VBR ข้ามเวลาไม่เป๊ะ)
