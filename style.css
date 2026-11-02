@@ -115,6 +115,8 @@ input[type=range]{width:100%;accent-color:var(--ball)}
 .row.col small{color:var(--muted);font-size:12.5px}
 .row.chk{justify-content:flex-start}
 .row.chk input{width:20px;height:20px;accent-color:var(--violet)}
+.edit{background:var(--bg2);border-radius:14px;padding:12px 14px;display:grid;gap:6px}
+.edit p{margin:0}
 .howto{background:var(--bg2);border-radius:14px;padding:12px 14px;font-size:14px;color:var(--muted)}
 .howto b{color:var(--ink)} .howto p{margin:4px 0 0}
 .pbar{height:10px;border-radius:6px;background:var(--bg2);overflow:hidden}

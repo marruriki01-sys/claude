@@ -152,6 +152,18 @@ async function to16k(ab, highpass) {
     return out;
   }
 }
+// decoded audio → 16-bit mono WAV blob (exact seeking, unlike VBR mp3)
+function encodeWav(ab) {
+  const C = ab.numberOfChannels, n = ab.length, sr = ab.sampleRate, ch = [];
+  for (let c = 0; c < C; c++) ch.push(ab.getChannelData(c));
+  const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  let o = 44;
+  for (let i = 0; i < n; i++) { let x = 0; for (let c = 0; c < C; c++) x += ch[c][i]; x /= C; x = Math.max(-1, Math.min(1, x)); v.setInt16(o, x < 0 ? x * 0x8000 : x * 0x7fff, true); o += 2; }
+  return new Blob([buf], { type: 'audio/wav' });
+}
 let worker = null;
 function analyze(x, onProg) {
   return new Promise((res, rej) => {
@@ -255,7 +267,10 @@ function cleanLine(m) {
 let packCache = null;
 async function getPacks() {
   if (packCache) return packCache;
-  try { packCache = [await (await fetch('packs/dokmai.json')).json()]; } catch (e) { packCache = []; }
+  try {
+    const idx = await (await fetch('packs/index.json')).json();
+    packCache = (await Promise.all(idx.map(f => fetch('packs/' + f).then(r => r.json()).catch(() => null)))).filter(Boolean);
+  } catch (e) { packCache = []; }
   return packCache;
 }
 // Compare a short auto-line excerpt with an accurate pack line; returns {lag, score}
@@ -280,19 +295,20 @@ async function addSong(file) {
     const ab = await decodeFile(file);
     const dur = ab.duration, nOut = Math.ceil(dur / HOP);
     proc('เตรียมเสียงสำหรับวิเคราะห์…', 0.08);
-    let line = null, kind = 'auto', title = guess.title, artist = guess.artist, note = '', engine = null, lag = 0, packVer = null;
+    let line = null, kind = 'auto', title = guess.title, artist = guess.artist, note = '', engine = null, lag = 0, packVer = null, packId = null;
     const packs = await getPacks();
-    const cand = packs.find(p => Math.abs(p.duration - dur) < 4);
-    if (cand) {
+    const cands = packs.filter(p => Math.abs(p.duration - dur) < 4);
+    if (cands.length) {
       const x = await to16k(ab, true);
       proc('เช็กว่ามีเส้นแม่นพิเศษสำหรับเพลงนี้ไหม…', 0.12);
       const s0 = Math.min(25, dur / 4), s1 = Math.min(dur, s0 + 50);
       const exHz = await analyze(x.slice(Math.floor(s0 * 16000), Math.floor(s1 * 16000)), f => proc('เช็กว่ามีเส้นแม่นพิเศษสำหรับเพลงนี้ไหม…', 0.12 + f * 0.15));
       const ex = toLine(exHz, Math.ceil((s1 - s0) / HOP));
-      const m = matchPack(ex, Math.round(s0 / HOP), cand);
-      if (m.score >= 0.5) {
+      let cand = null, m = { score: 0 };
+      for (const p of cands) { const mm = matchPack(ex, Math.round(s0 / HOP), p); if (mm.score > m.score) { m = mm; cand = p; } }
+      if (cand && m.score >= 0.5) {
         line = new Array(nOut).fill(0).map((_, j) => cand.p10[j + m.lag] || 0);
-        kind = 'pack'; title = cand.title; artist = cand.artist; lag = m.lag; packVer = cand.ver || 1;
+        kind = 'pack'; title = cand.title; artist = cand.artist; lag = m.lag; packVer = cand.ver || 1; packId = cand.id;
         note = '✦ เจอเส้นแม่นพิเศษของเพลงนี้ ใช้เส้นที่ทำจากเสียงร้องแยกเดี่ยว';
       }
     }
@@ -309,8 +325,8 @@ async function addSong(file) {
     $('fTitle').value = title; $('fArtist').value = artist; $('fNote').textContent = note; $('procForm').hidden = false;
     await new Promise(res => { $('fSave').onclick = res; });
     const id = 's' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const rec = { id, title: $('fTitle').value.trim() || title, artist: $('fArtist').value.trim(), duration: dur, kind, engine, lag, packVer, p10: line, created: Date.now(), best: null, plays: 0 };
-    await DB.putAudio(id, file);
+    const rec = { id, title: $('fTitle').value.trim() || title, artist: $('fArtist').value.trim(), duration: dur, kind, engine, lag, packVer, packId, p10: line, created: Date.now(), best: null, plays: 0 };
+    await DB.putAudio(id, encodeWav(ab)); rec.audioFmt = 'wav';
     await DB.putSong(rec);
     try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
     $('proc').hidden = true; renderLib();
@@ -374,12 +390,19 @@ function applyAudio() {
 }
 async function openSong(id) {
   const rec = await DB.song(id); if (!rec) return;
-  const blob = await DB.audio(id);
+  let blob = await DB.audio(id);
+  if (blob && rec.audioFmt !== 'wav') {
+    // songs saved as mp3 before: VBR mp3 seeks to the wrong spot in browsers (line drifts up to ±0.5 s) → convert once to WAV
+    $('procForm').hidden = true; $('procH').textContent = 'ปรับไฟล์เพลงให้ตรงจังหวะ (ครั้งเดียว)';
+    proc('แปลงไฟล์เพลงเป็น WAV เพื่อให้เส้นตรงกับเสียงเป๊ะ…', 0.4, 'ใช้เวลาไม่กี่วินาที');
+    try { const ab = await decodeFile(blob); blob = encodeWav(ab); await DB.putAudio(id, blob); rec.audioFmt = 'wav'; await DB.putSong(rec); } catch (e) {}
+    $('proc').hidden = true;
+  }
   if (!blob) { alertErr('ไม่เจอไฟล์เพลงในเครื่อง ลองลบแล้วเพิ่มเพลงนี้ใหม่'); return; }
   pause(true);
   // accurate-line pack got better since this song was added → swap in the new line automatically
   if (rec.kind === 'pack') {
-    const pk = (await getPacks()).find(p => p.title === rec.title) || (await getPacks())[0];
+    const pk = (await getPacks()).find(p => p.id === rec.packId) || (await getPacks()).find(p => p.title === rec.title);
     if (pk && (rec.packVer || 1) !== (pk.ver || 1)) {
       let lag = rec.lag;
       if (lag == null) { const m = matchPack(rec.p10.slice(0, Math.min(rec.p10.length, 6000)), 0, pk); lag = m.lag; }
@@ -784,3 +807,17 @@ show('vLib');
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
 }
+
+// ---------- fix the line by hand ----------
+async function editLine(fn, msg) {
+  if (!S) return;
+  if (!S.p10orig) S.p10orig = S.p10.slice();
+  const t = clock(); fn(t);
+  S.p10 = P.map(v => v == null ? 0 : Math.round(v * 10));
+  try { await DB.putSong(S); } catch (e) {}
+  const keep = el.currentTime; buildModel(S); renderPhr(); el.currentTime = keep;
+  $('editMsg').textContent = msg;
+}
+$('cutBefore').onclick = () => editLine(t => { const k = Math.round(t / HOP); for (let i = 0; i < k && i < P.length; i++) P[i] = null; }, 'ลบเส้นก่อน ' + fmt(clock()) + ' แล้ว');
+$('cutPhrase').onclick = () => { const i = curPh != null ? curPh : phAt(clock()); const p = PH[i]; if (!p) return; editLine(() => { for (let k = Math.floor(p[0] / HOP); k <= Math.ceil(p[1] / HOP) && k < P.length; k++) P[k] = null; }, 'ลบเส้นท่อน ' + (i + 1) + ' แล้ว'); };
+$('restoreLine').onclick = async () => { if (!S || !S.p10orig) { $('editMsg').textContent = 'ยังไม่ได้แก้เส้นเพลงนี้'; return; } S.p10 = S.p10orig.slice(); delete S.p10orig; try { await DB.putSong(S); } catch (e) {} const keep = el.currentTime; buildModel(S); renderPhr(); el.currentTime = keep; $('editMsg').textContent = 'คืนเส้นเดิมแล้ว'; };

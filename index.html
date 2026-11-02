@@ -114,6 +114,12 @@
     <label class="row">ย้ายคีย์<select id="shift"></select></label>
     <label class="row col">เลื่อนเส้นให้ตรงเสียง <b id="syncTxt">0 ms</b><input type="range" id="sync" min="-300" max="500" step="10" value="0"><small>เส้นมาก่อนเสียงที่ได้ยิน → เลื่อนไป + (หูฟังบลูทูธมักต้อง +200 ถึง +300)</small></label>
     <label class="row chk"><input type="checkbox" id="oct" checked> ร้องต่ำ/สูงกว่าทั้งช่วงเสียง (คนละ octave) ก็นับว่าตรง</label>
+    <div class="edit">
+      <b>แก้เส้นด้วยมือ</b>
+      <p class="muted small">ใช้ตอนเส้นขึ้นทั้งที่นักร้องยังไม่ร้อง (เช่นช่วงอินโทร) · ลบที่ตำแหน่งเพลงตอนนี้</p>
+      <div class="ract"><button class="btn" id="cutBefore">✂ ลบเส้นก่อนตรงนี้</button><button class="btn" id="cutPhrase">✂ ลบเส้นท่อนนี้</button><button class="btn ghost" id="restoreLine">↺ คืนเส้นเดิม</button></div>
+      <p class="small gold" id="editMsg" aria-live="polite"></p>
+    </div>
     <button class="btn ghost" id="bReset">ล้างคะแนนเพลงนี้ (รอบนี้)</button>
     <div class="howto">
       <b>วิธีเล่น</b>
